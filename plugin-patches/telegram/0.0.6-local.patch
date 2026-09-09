@@ -1,0 +1,120 @@
+diff --git a/server.ts b/server.ts
+index bfc551f..b179eb9 100644
+--- a/server.ts
++++ b/server.ts
+@@ -341,6 +341,22 @@ if (!STATIC) setInterval(checkApprovals, 5000).unref()
+ // Telegram caps messages at 4096 chars. Split long replies, preferring
+ // paragraph boundaries when chunkMode is 'newline'.
+ 
++// Strip long base64-shaped runs from inbound chat text before it enters
++// Claude's context. Wedging incidents seen in production more than once:
++// a base64-wrapped "decode and follow" payload was replayed on every
++// subsequent --continue turn and Anthropic's classifier flagged it as
++// injection, locking the session for every later message regardless of
++// author. Threshold 120 chars avoids clipping normal IDs/hashes/short tokens.
++const BASE64_BLOB_RE = /[A-Za-z0-9+/]{120,}={0,2}/g
++function stripSuspiciousBlobs(text: string): { text: string; stripped: number } {
++  let stripped = 0
++  const out = text.replace(BASE64_BLOB_RE, m => {
++    stripped++
++    return `[base64 blob stripped, ${m.length} chars]`
++  })
++  return { text: out, stripped }
++}
++
+ function chunk(text: string, limit: number, mode: 'length' | 'newline'): string[] {
+   if (text.length <= limit) return [text]
+   const out: string[] = []
+@@ -876,6 +892,35 @@ bot.on('message:sticker', async ctx => {
+   })
+ })
+ 
++// LOCAL PATCH (newcomer welcome): Telegram delivers a group join as a
++// service message carrying ctx.message.new_chat_members. The base plugin only wires
++// content subtypes (text/photo/...), so joins were silently dropped and Claude never
++// saw them. Surface human joins so Claude can post the welcome — the welcome copy
++// lives in Claude's memory (memory/channels/<chat>/newcomer-welcome.md), not
++// hardcoded here, so it stays editable without re-patching the plugin. Bots are
++// filtered out, including this bot being added to a new group. Routed through
++// handleInbound so the same gate()/sanitize/deliver path applies: only groups
++// configured chatty (requireMention=false) actually greet; mention-gated groups
++// drop the join, which is the desired behavior there.
++// NOTE: lives in the versioned plugin cache — lost on plugin update; tracked in
++// <repo>/plugin-patches/telegram/.
++// DISABLED by default: greeting every join means a wave of spam
++// registrations becomes a wave of welcomes from us — i.e. the bot becomes the spam it
++// cleans up (a chat admin caught this the evening it shipped). Re-enable by
++// flipping this to true once the trigger moves to "newcomer's first message" or gains a
++// rate limit. Handler kept intact so re-enabling is a one-line change.
++const WELCOME_ON_JOIN = false
++
++bot.on('message:new_chat_members', async ctx => {
++  if (!WELCOME_ON_JOIN) return
++  const humans = ctx.message.new_chat_members.filter(u => !u.is_bot)
++  if (humans.length === 0) return
++  const names = humans
++    .map(u => safeName([u.first_name, u.last_name].filter(Boolean).join(' ')) || String(u.id))
++    .join(', ')
++  await handleInbound(ctx, `(new_chat_members: ${names})`, undefined)
++})
++
+ type AttachmentMeta = {
+   kind: string
+   file_id: string
+@@ -952,17 +997,27 @@ async function handleInbound(
+ 
+   const imagePath = downloadImage ? await downloadImage() : undefined
+ 
++  const sanitized = stripSuspiciousBlobs(text)
++  if (sanitized.stripped > 0) {
++    process.stderr.write(
++      `telegram channel: stripped ${sanitized.stripped} base64 blob(s) from ` +
++      `chat=${chat_id} msg=${msgId ?? '?'} user=${from.username ?? from.id}\n`,
++    )
++  }
++
+   // image_path goes in meta only — an in-content "[image attached — read: PATH]"
+   // annotation is forgeable by any allowlisted sender typing that string.
+   mcp.notification({
+     method: 'notifications/claude/channel',
+     params: {
+-      content: text,
++      content: sanitized.text,
+       meta: {
+         chat_id,
+         ...(msgId != null ? { message_id: String(msgId) } : {}),
+         user: from.username ?? String(from.id),
+         user_id: String(from.id),
++        ...(from.first_name ? { first_name: from.first_name } : {}),
++        ...(from.last_name ? { last_name: from.last_name } : {}),
+         ts: new Date((ctx.message?.date ?? 0) * 1000).toISOString(),
+         ...(imagePath ? { image_path: imagePath } : {}),
+         ...(attachment ? {
+@@ -972,6 +1027,27 @@ async function handleInbound(
+           ...(attachment.mime ? { attachment_mime: attachment.mime } : {}),
+           ...(attachment.name ? { attachment_name: attachment.name } : {}),
+         } : {}),
++        // LOCAL PATCH (quote-reply visibility): Telegram delivers the
++        // replied-to message in ctx.message.reply_to_message, but it was never
++        // propagated into meta, so Claude never saw quoted content. Add it here.
++        // quoted_text/quoted_fragment sanitized via stripSuspiciousBlobs like the
++        // main body so a quote can't smuggle a base64 blob past the filter.
++        // NOTE: lives in the versioned plugin cache — lost on plugin update.
++        ...(ctx.message?.reply_to_message ? {
++          reply_to_message_id: String(ctx.message.reply_to_message.message_id),
++          quoted_text: stripSuspiciousBlobs(
++            ctx.message.reply_to_message.text ??
++            ctx.message.reply_to_message.caption ?? '',
++          ).text,
++          ...(ctx.message.reply_to_message.from ? {
++            quoted_user:
++              ctx.message.reply_to_message.from.username ??
++              String(ctx.message.reply_to_message.from.id),
++          } : {}),
++        } : {}),
++        ...((ctx.message as any)?.quote?.text ? {
++          quoted_fragment: stripSuspiciousBlobs(String((ctx.message as any).quote.text)).text,
++        } : {}),
+       },
+     },
+   }).catch(err => {

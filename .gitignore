@@ -1,0 +1,29 @@
+# Secrets and runtime channel state. Never version these.
+.claude/channels/
+.claude/scripts/bot.env
+.env
+.env.*
+!.env.example
+
+# Runtime outputs
+.claude/scripts/logs/
+logs/
+*.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Per-machine Claude Code state that may appear in the project dir
+.claude/settings.local.json.bak-*
+
+# Editor and OS cruft
+*.bak-????-??-??
+*.tmp
+.DS_Store
+
+# Private memory. The public repo ships the rule files; everything about real people
+# stays local. Remove these two lines in your private fork if you version profiles.
+memory/users/*.md
+!memory/users/README.md

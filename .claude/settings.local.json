@@ -1,0 +1,94 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "mcp__plugin_telegram_telegram__reply",
+      "mcp__plugin_telegram_telegram__react",
+      "Bash(.claude/scripts/tg-mod.sh:*)",
+      "Bash(.claude/scripts/tglog.sh:*)",
+      "Bash(python3:*)",
+      "Bash(date:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(wc:*)",
+      "Bash(mkdir -p *)",
+      "Bash(printf *)",
+      "Bash(tmux ls:*)",
+      "Bash(tmux capture-pane:*)",
+      "Bash(crontab -l)"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/prompt-injection-prefilter.py" }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/chatlog-writer.py" }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/chatlog-recall-nag.py" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Edit|Write|NotebookEdit|Bash",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/pre_tool_denylist.py" }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_telegram_telegram__reply|mcp__plugin_telegram_telegram__edit_message",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/recall-gate.py" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__plugin_telegram_telegram__reply",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/chatlog-writer-out.py" }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/chatlog-recall-ack.py" }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/chatlog-recall.py" },
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/memory-recall.py" }
+        ]
+      },
+      {
+        "matcher": "resume",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/chatlog-recall.py" },
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/memory-recall.py" }
+        ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/chatlog-recall.py" },
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/scripts/memory-recall.py" }
+        ]
+      }
+    ]
+  }
+}
